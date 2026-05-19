@@ -694,4 +694,12 @@ response (menu is misconfigured for Approach A).
       new value automatically (no further code change required
       beyond the constant). Ruff pass, commit on
       `feature/cal-and-stable-read`, note on PR #9.
+- [x] Follow-up tweak (user 2026-05-19): convert the final stage
+      of `main.py` from a single `next(stream)` demo into a
+      Ctrl-C-bounded continuous loop over `stream_stable_weights`
+      so the printed value keeps refreshing as the balance reading
+      changes. Mirrors `cli/measure.py watch` so `main.py` doubles
+      as a live readout. Update the module docstring to match.
+      Ruff pass, commit on `feature/cal-and-stable-read`, note on
+      PR #9.
 - [ ] GitHub issue update on merge

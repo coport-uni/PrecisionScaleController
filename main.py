@@ -2,9 +2,9 @@
 
 Drives a real Sartorius Entris-II balance over USB-C SBI through every
 feature the package exposes: ID queries, internal calibration with
-ambient forced to "very unstable", a single stable read, and the first
-stable-stream yield. Auto-detects the port by Sartorius USB vendor ID
-0x24bc.
+ambient forced to "very unstable", a single stable read, and then a
+continuous stable-weight stream that prints each new value until
+Ctrl-C. Auto-detects the port by Sartorius USB vendor ID 0x24bc.
 
 The pan must be empty when this runs (the calibration step requires
 it). For a flag-driven CLI see ``entris_ii.cli.diagnose`` (read-only)
@@ -47,12 +47,12 @@ def main() -> int:
 
         # 2. Internal calibration with ambient forced to very unstable.
         #    Pan must be empty.
-        print("Calibrating (ambient: very unstable)…")
-        post_cal = scale.calibrate_internal_very_unstable()
-        print(
-            f"  post-cal: {post_cal.value:+.4f} {post_cal.unit} "
-            f"(raw {post_cal.raw!r})"
-        )
+        # print("Calibrating (ambient: very unstable)…")
+        # post_cal = scale.calibrate_internal_very_unstable()
+        # print(
+        #     f"  post-cal: {post_cal.value:+.4f} {post_cal.unit} "
+        #     f"(raw {post_cal.raw!r})"
+        # )
 
         # 3. One stable read.
         single = scale.read_stable_weight()
@@ -61,18 +61,19 @@ def main() -> int:
             f"(raw {single.raw!r})"
         )
 
-        # 4. First yield from the stable-weight stream — confirms the
-        #    generator surface. Use the CLI's ``measure watch``
-        #    subcommand for continuous monitoring.
-        stream = scale.stream_stable_weights()
+        # 4. Continuous stable-weight stream — prints each new
+        #    value as the balance reading changes (exact-float
+        #    dedup inside the generator). Press Ctrl-C to stop.
+        print("Streaming stable weights; press Ctrl-C to stop.")
         try:
-            first = next(stream)
-        finally:
-            stream.close()
-        print(
-            f"Stream first:  {first.value:+.4f} {first.unit} "
-            f"(raw {first.raw!r})"
-        )
+            for reading in scale.stream_stable_weights():
+                print(
+                    f"  {reading.value:+.4f} {reading.unit} "
+                    f"(raw {reading.raw!r})",
+                    flush=True,
+                )
+        except KeyboardInterrupt:
+            print("stopped.", file=sys.stderr)
     return 0
 
 
