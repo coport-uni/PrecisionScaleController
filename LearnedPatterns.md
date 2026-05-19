@@ -3,7 +3,7 @@
 > Patterns extracted from `ToDo.md` Completed items. Consult the relevant sections before drafting new ToDo entries. Append new patterns after each task completes (see CLAUDE.md §9 Learned Patterns Reference).
 >
 > Last updated: 2026-05-19
-> Total patterns: 16
+> Total patterns: 17
 >
 > Provenance format: `(from ToDo#N)` where N is the 1-based index of the top-level `##` section in `ToDo.md` at the time of extraction.
 
@@ -67,6 +67,20 @@
 - **Cause**: The hook scans the full Bash `command` string before execution, including everything inside `<<'EOF' ... EOF` blocks.
 - **Fix**: Describe credential patterns with wildcards or obfuscated variants (for example `sk-*`, `ghp_*`) in Bash payloads. Keep literal test strings confined to file content written via Write or Edit.
 - **Rule**: Never embed literal credential prefixes in Bash command strings; such strings are safe only in files written via Write/Edit. (from ToDo#6)
+
+### Q3. Sartorius SBI Format-1 `Esc Z` opens cal menu but does not execute
+
+- **Problem**: Calibration command `Esc Z` ("Perform internal adjustment", Format 1) caused the BCE224I-1SKR to display `Stat Cal.Int.` and wait for confirmation indefinitely. `Esc kP` polling returned `Stat Cal.Int.` and (after polling resumed) `Stat Cal.Run.` but the procedure never produced a post-cal weight.
+- **Cause**: On this Entris-II model, Format-1 `Esc Z` only opens the internal-cal *menu* (the same screen the front-panel CAL key opens) and waits for user confirmation. The PDF "Commands (Data Input Format)" table lists both `Z` (Format 1) and `x0_` (Format 2) under footnote ¹⁾ "only for balances with internal weight" but does not explain that they have different effects.
+- **Fix**: Use Format-2 `Esc x0_` ("Internal calibration") to actually trigger the procedure. Cal completes in ~15 s on an empty pan; polling traverses `Stat Cal.Run.` → `Stat Cal.End` → a few unit-less drift values (e.g. `G   -   0.0007`) → the final unit-bearing zero (`G         0.0000 g`).
+- **Rule**: Always use Format-2 `Esc x0_` for SBI-driven internal calibration on Entris-II. Treat Format-1 `Esc Z` as a "show menu" command, not an execute command. (from ToDo#21)
+
+### Q4. Sartorius SBI emits unit-less ID-coded lines during normal operation
+
+- **Problem**: `stream_stable_weights` crashed with `ValueError: non-numeric SBI response (special/unstable): 'G         0.0000'` on hardware. The initial `read_stable_weight` succeeded, then subsequent stream reads occasionally returned ID-coded lines with no trailing unit field, which the unit-suffixed-only regex could not parse.
+- **Cause**: The BCE224I sometimes emits the 16-char ID-coded form `<ID-label> <signed-value>` without a unit suffix even after `Cal.End` — not only as a brief drift line during internal calibration (already covered by Q3) but also intermittently during normal Approach-A stable reads. The original `_WEIGHT_RE` only matched `<value> <unit>`, so any unit-less line raised `ValueError` and propagated up through `read_stable_weight` into the generator.
+- **Fix**: Added a `_WEIGHT_RE_ID_NO_UNIT` fallback regex (`<id-label> <signed-numeric>`, unit defaults to `""`) and a `_STATUS_PREFIX_RE` so unstable/overload/underload markers (`Stat` / `H` / `High` / `L` / `Low`) still raise `ValueError` even when followed by a numeric placeholder. `stream_stable_weights` additionally catches `ValueError` and logs the skip at debug level so a transient non-numeric line never kills the loop.
+- **Rule**: Always accept the unit-less ID-coded SBI shape as a valid weight reading (with `unit=""`), and always make long-running SBI streams tolerant of transient `ValueError` from the parser. Never let status-prefixed lines (`Stat`, `H`, `L`) slip through the no-unit fallback. (from ToDo#28)
 
 ---
 
