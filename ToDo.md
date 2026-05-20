@@ -983,7 +983,7 @@ Pure documentation task — no Python edits, no hardware impact.
 - [x] Create GitHub issue (#16)
 - [x] Cut working branch `docs/readme-approach-b-sync` from main
       (carry over the existing README diff)
-- [ ] Commit and push with `docs(readme):` Conventional Commits
-      prefix
-- [ ] Open PR per §15.2 (closes #16)
-- [ ] GitHub issue update on merge
+- [x] Commit and push with `docs(readme):` Conventional Commits
+      prefix (387a5dc)
+- [x] Open PR per §15.2 (PR #17 — closes #16)
+- [ ] GitHub issue update on merge (auto via `Closes #16` in PR #17)
