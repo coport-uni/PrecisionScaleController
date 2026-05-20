@@ -847,6 +847,6 @@ COM.OUTP into a single docs branch `docs/cal-menu-preconditions`
       exposes the per-shot trigger via `Esc P` / `Esc kP`" using
       the Problem / Cause / Fix / Rule format.
 - [x] Ruff check + format check on the modified Python file
-- [ ] Commit and push with `docs(scale):` Conventional Commits prefix
-- [ ] Open PR per §15.2 (closes #12)
-- [ ] GitHub issue update on merge
+- [x] Commit and push with `docs(scale):` Conventional Commits prefix (687e37a)
+- [x] Open PR per §15.2 (closes #12) — PR #13
+- [ ] GitHub issue update on merge (auto via `Closes #12` in PR #13)
