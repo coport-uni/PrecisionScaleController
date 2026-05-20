@@ -121,6 +121,15 @@ class PrecisionScaleController:
     # stderr during ``calibrate_internal_very_unstable``.
     CAL_PROGRESS_BAR_WIDTH: ClassVar[int] = 20
 
+    # Default jitter band applied by ``stream_stable_weights``. Even
+    # under Approach B (AUTO W/ + passive read) the BCE224I emits
+    # near-duplicate readings that differ at the 0.001 g level during
+    # a steady pan — hardware-verified 2026-05-20. Readings whose
+    # absolute change versus the last emitted value falls below this
+    # threshold are dropped; pass ``jitter_threshold=0`` on the call
+    # to fall back to exact-float deduplication only.
+    JITTER_THRESHOLD: ClassVar[float] = 0.01
+
     # Parse one signed decimal weight + unit anywhere in an SBI line.
     # Covers both the 16-char and 22-char (ID-coded) output formats —
     # the leading ID label (e.g. "N") never contains a sign-prefixed
@@ -519,15 +528,22 @@ class PrecisionScaleController:
     def stream_stable_weights(
         self,
         timeout: float = STABLE_READ_TIMEOUT_S,
+        jitter_threshold: float = JITTER_THRESHOLD,
     ) -> Iterator[WeightReading]:
-        """Yield each auto-pushed stable weight.
+        """Yield each auto-pushed stable weight, with jitter filter.
 
         Reads the balance's AUTO W/ push stream (Approach B) directly
         — no ``Esc kP`` triggers. Cadence is data-driven: the balance
-        emits one line per new stable value (its own stability
-        detector handles deduplication and settling), so the loop
-        blocks between events rather than spinning and the host does
-        not need its own jitter / rising-guard filters.
+        emits one line per new stable value, so the loop blocks
+        between events rather than spinning.
+
+        One host-side filter remains: readings whose absolute change
+        versus the last *yielded* value is below ``jitter_threshold``
+        are dropped. Hardware verification on the BCE224I (2026-05-20)
+        showed that the balance still pushes near-duplicate values at
+        the 0.001 g level even under AUTO W/, so the filter is kept;
+        pass ``jitter_threshold=0`` to fall back to exact-float
+        deduplication only.
 
         :class:`TimeoutError` from :meth:`read_stable_weight` (no
         stability event in ``timeout`` seconds) is logged at debug
@@ -537,10 +553,14 @@ class PrecisionScaleController:
         Args:
             timeout: Per-iteration wait budget passed to
                 :meth:`read_stable_weight`.
+            jitter_threshold: Inclusive lower bound on the change
+                magnitude required for emission. Defaults to
+                :attr:`JITTER_THRESHOLD`.
 
         Yields:
-            :class:`WeightReading` instances pushed by the balance.
+            :class:`WeightReading` instances that survive the filter.
         """
+        last_yielded: float | None = None
         while True:
             try:
                 reading = self.read_stable_weight(timeout=timeout)
@@ -551,4 +571,13 @@ class PrecisionScaleController:
                     "no stable reading within %ss; continuing", timeout
                 )
                 continue
+            val = reading.value
+            # Jitter filter. ``delta == 0.0`` also covers exact-float
+            # duplicates when the caller opts out of the jitter band
+            # with ``jitter_threshold=0``.
+            if last_yielded is not None:
+                delta = abs(val - last_yielded)
+                if delta == 0.0 or delta < jitter_threshold:
+                    continue
             yield reading
+            last_yielded = val

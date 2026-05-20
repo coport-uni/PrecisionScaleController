@@ -935,13 +935,25 @@ docs-only scope of Task #11.
       and `main.py` docstring (drops filter references). To be
       re-evaluated during hardware verify — restore if the balance
       shows jitter or early-trigger emissions on the BCE224I.
+- [x] Partial restore (user 2026-05-20, post hardware verify):
+      hardware test on BCE224I-1SKR confirmed the balance still
+      pushes near-duplicate values at the 0.001 g level under
+      AUTO W/, so the jitter filter is needed. Restored
+      `JITTER_THRESHOLD = 0.01` class constant, the
+      `jitter_threshold` keyword argument on
+      `stream_stable_weights`, and the filter body. Rising-guard
+      stays removed because the user only flagged jitter as
+      needed during verify. Updates README flow diagram, README
+      filter table (now one row), and `main.py` docstring.
 - [ ] Add LearnedPatterns §Q7 if the passive-read refactor surfaces
       a new SBI-side quirk during hardware verify
 - [x] Ruff check + format check on the modified Python file
-- [ ] Hardware verify on `/dev/ttyACM0` (BCE224I-1SKR): run
-      cal → single read → stream; confirm no continuous beep,
-      readings still stable, filter removal still appropriate
-      (restore filters if jitter / early-trigger reappears)
+- [x] Hardware verify on `/dev/ttyACM0` (BCE224I-1SKR) — passed
+      with one finding: jitter at the 0.001 g level persists under
+      AUTO W/, so the jitter filter was restored (rising-guard
+      stays removed). No continuous beep observed. Cal block in
+      `main.py` re-enabled before merge so the end-to-end demo
+      again exercises cal → stable read → stream.
 - [x] Commit and push with `refactor(scale):` Conventional Commits
       prefix (614e230)
 - [x] Open PR per §15.2 (PR #15) — closes #14

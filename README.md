@@ -63,12 +63,16 @@ flowchart TD
     F --> G["Poll Esc kP every 1 s<br/>render stderr progress bar<br/>up to CAL_TIMEOUT_S (180 s)"]
     G --> H["Parse post-cal weight"]
     H --> I["read_stable_weight<br/>passive read of AUTO W/ push, parse"]
-    I --> J["stream_stable_weights<br/>loop _read_response → parse →<br/>yield each pushed reading"]
+    I --> J["stream_stable_weights<br/>loop _read_response → parse →<br/>jitter filter → yield"]
     J -- "KeyboardInterrupt (Ctrl-C)" --> K["print 'stopped.' on stderr"]
     K --> L["Close serial (context exit)"]
 ```
 
-Under Approach B (AUTO W/ + passive read) the balance's own stability detector decides when to push a new value, so the host-side jitter / rising-guard filters that the earlier Approach A polling loop relied on are no longer needed — `stream_stable_weights` simply yields each line the balance sends.
+Under Approach B (AUTO W/ + passive read) the balance's own stability detector decides when to push a new value, so the rising-guard filter that the earlier Approach A polling loop relied on is no longer needed. The jitter filter is retained — hardware verification on the BCE224I showed the balance still pushes near-duplicate values at the 0.001 g level even under AUTO W/, so `stream_stable_weights` drops readings whose absolute change vs. the last *yielded* value is below `JITTER_THRESHOLD` (default `0.01`). Pass `jitter_threshold=0` to disable.
+
+| Constant | Default | Meaning |
+|---|---|---|
+| `JITTER_THRESHOLD` | `0.01` | Skip readings whose absolute change vs. the last *yielded* value is below this band. |
 
 ---
 
