@@ -986,4 +986,59 @@ Pure documentation task — no Python edits, no hardware impact.
 - [x] Commit and push with `docs(readme):` Conventional Commits
       prefix (387a5dc)
 - [x] Open PR per §15.2 (PR #17 — closes #16)
-- [ ] GitHub issue update on merge (auto via `Closes #16` in PR #17)
+- [x] GitHub issue update on merge (auto via `Closes #16` in PR #17
+      — squash-merged 2026-05-20 as 5609a71)
+
+---
+
+## Task #14 (2026-05-20): Embed demo video at the top of README
+
+### Background
+User uploaded a demo video to
+`media/KakaoTalk_20260520_110331553.mp4` (50 MB) and wants it
+embedded at the top of `README.md` so first-time readers see the
+controller in action. Decisions captured 2026-05-20:
+
+1. Embed method = PR-comment user-attachments URL. GitHub README
+   inline video playback is most reliable when the `<video>` src is
+   a `github.com/user-attachments/...` URL produced by drag-and-
+   dropping the file into an issue/PR comment via the web UI. The
+   `gh` CLI cannot produce that URL — the user uploads it manually
+   inside the PR after it is opened.
+2. Filename rename: `KakaoTalk_20260520_110331553.mp4` → `demo.mp4`
+   per CLAUDE.md §2 English convention and README readability.
+3. The renamed `media/demo.mp4` is committed to the repo (user
+   direction 2026-05-20). 50 MB sits at GitHub's soft warning,
+   below the 100 MB hard limit; acceptable for this one-off demo
+   asset. No Git LFS is introduced — single file, low churn.
+4. Placement: between the H1 title block (lines 1–6) and the first
+   `---` separator (line 7) — top-of-README hero slot.
+5. Two-commit PR flow:
+   - Commit 1 lands the rename + README `<video>` block with a
+     placeholder `src="media/demo.mp4"` and a `<!-- TODO: replace
+     src with user-attachments URL -->` HTML comment marker.
+   - User opens the PR in the browser, drag-drops `media/demo.mp4`
+     into a PR comment, shares the resulting
+     `github.com/user-attachments/...` URL.
+   - Commit 2 replaces the placeholder `src` and removes the TODO
+     comment.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] Create GitHub issue (#18)
+- [ ] Cut working branch `docs/readme-demo-video` from main
+- [ ] Rename `media/KakaoTalk_20260520_110331553.mp4` →
+      `media/demo.mp4` via `git mv`
+- [ ] Insert a `<video controls width="100%">` block at the top of
+      `README.md` (between line 6 and the existing line-7 `---`)
+      with `src="media/demo.mp4"` placeholder and a TODO HTML
+      comment flagging the swap
+- [ ] Commit 1: rename + README placeholder with `docs(readme):`
+      Conventional Commits prefix
+- [ ] Push branch and open PR per §15.2 (closes #18)
+- [ ] User drag-drops `media/demo.mp4` into a PR comment via the
+      GitHub web UI and shares the `user-attachments` URL
+- [ ] Edit `README.md` to swap placeholder `src` for the real URL
+      and drop the TODO comment
+- [ ] Commit 2: URL swap-in, push onto the same branch
+- [ ] GitHub issue update on merge

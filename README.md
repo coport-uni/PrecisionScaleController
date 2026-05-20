@@ -4,6 +4,9 @@
 
 This repository hosts the PrecisionScaleController project together with the rules and workflows every [Claude Code](https://claude.ai/code) session in it must follow. The canonical ruleset lives in [`CLAUDE.md`](CLAUDE.md) (no separate `CommonClaude.md` file).
 
+<!-- TODO: After PR opens, drag-drop media/demo.mp4 into a PR comment and replace the src below with the resulting github.com/user-attachments/... URL. -->
+<video src="media/demo.mp4" controls width="100%"></video>
+
 ---
 
 ## What This Project Does
