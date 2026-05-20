@@ -104,7 +104,7 @@ def main(argv: list[str] | None = None) -> int:
             f"{args.watch_seconds:.1f}s…"
         )
         start = time.monotonic()
-        stream = scale.stream_stable_weights(timeout=5.0, interval=0.2)
+        stream = scale.stream_stable_weights(timeout=5.0)
         try:
             first = next(stream)
         finally:

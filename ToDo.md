@@ -850,3 +850,111 @@ COM.OUTP into a single docs branch `docs/cal-menu-preconditions`
 - [x] Commit and push with `docs(scale):` Conventional Commits prefix (687e37a)
 - [x] Open PR per §15.2 (closes #12) — PR #13
 - [x] GitHub issue update on merge (auto via `Closes #12` in PR #13) — #12 closed 2026-05-20, squash-merged as a06a843
+
+---
+
+## Task #12 (2026-05-20): Switch COM.OUTP recommendation to AUTO W/ and refactor controller to passive read
+
+### Background
+PR #13 (Task #11) landed a docstring/README/LearnedPatterns precondition
+note recommending `COM.OUTP = IND.AFTR` and framing `AUTO W/` as
+"conflicting" with `Esc kP` polling. Two corrections surfaced after
+merge:
+
+1. Both `IND.AFTR` and `AUTO W/` gate output on stability; the original
+   framing implying `AUTO W/` was stability-deficient was wrong. The
+   real difference between the two is **who initiates the read** —
+   `IND.AFTR` is host-triggered via `Esc kP`, `AUTO W/` is balance-
+   triggered (auto-push on each new stable value).
+2. Hardware test (user 2026-05-20): the current polling code + the
+   balance configured as `COM.OUTP = AUTO W/` **does work end-to-end**.
+   The only visible downside is a continuous "device busy" beep
+   because each `Esc kP` overlaps with the balance's auto-push
+   stream, keeping the print engine in a busy state.
+
+Decision: switch the recommended `COM.OUTP` value to `AUTO W/` and
+adapt the controller from `Esc kP` polling ("Approach A") to a passive
+read loop ("Approach B"), which eliminates the beeping by letting the
+balance drive cadence. Track separately from PR #13 because the
+change spans code + docs + hardware verification, well beyond the
+docs-only scope of Task #11.
+
+### Design decisions (user 2026-05-20)
+- Branch base: `feat/com-outp-auto-passive` cut from `main` post
+  `006343a`.
+- Recommended `COM.OUTP` value flips from `IND.AFTR` to `AUTO W/`
+  across module docstring, `calibrate_internal_very_unstable`
+  docstring, README "Menu-only calibration preconditions" subsection,
+  and LearnedPatterns §Q6.
+- Controller refactor:
+  - `read_stable_weight` reads one auto-pushed line (no `Esc kP`
+    trigger) with the existing `STABLE_READ_TIMEOUT_S` window.
+  - `stream_stable_weights` loops `_read_response` directly,
+    keeping the jitter + rising-guard filters but dropping the
+    `interval` sleep — cadence is now data-driven.
+  - The cal polling loop inside `calibrate_internal_very_unstable`
+    keeps `Esc kP` polling because the calibration sequence emits
+    progress markers (`Cal.Run.` / `Cal.End`) that AUTO W/ would
+    not push spontaneously. The two flows remain asymmetric on
+    purpose.
+- `CMD_PRINT_KEY` constant is retained (cal polling still uses it).
+- README "Manual with stability" subsection is renamed / rewritten
+  to "Approach B: auto-push on stability"; the Approach A naming
+  carried in code comments is updated for consistency.
+- LearnedPatterns §Q6 is rewritten in-place to record the corrected
+  reasoning (stability is equivalent; difference is push vs poll)
+  and the empirical beep observation.
+
+### Work items
+- [x] Append this ToDo entry
+- [x] Create GitHub issue (#14)
+- [x] Cut working branch `feat/com-outp-auto-passive` from main
+- [x] Refactor `read_stable_weight` — passive read, no `Esc kP`
+- [x] Refactor `stream_stable_weights` — loop `_read_response`
+      via `read_stable_weight`, keep jitter/rising filters, drop
+      `interval` parameter (cadence is now data-driven). Also
+      update `claude_test/test_cal_and_read.py` caller to drop
+      the removed `interval=0.2` kwarg.
+- [x] Verify cal polling loop is unchanged (still uses `Esc kP`)
+- [x] Update module docstring + `calibrate_internal_very_unstable`
+      docstring with AUTO W/ recommendation + corrected reasoning
+- [x] Update README "Menu-only calibration preconditions" subsection
+      (recommended value flip + corrected push/poll explanation +
+      beep note); rename/rewrite "Manual with stability" subsection
+      to "Auto-push on stability (Approach B)"
+- [x] Rewrite LearnedPatterns §Q6 to record corrected COM.OUTP
+      reasoning + the device-busy beep observation
+- [x] Scope addition (user 2026-05-20): remove the host-side
+      jitter / rising-guard filters from `stream_stable_weights`.
+      Under AUTO W/ the balance's own stability detector handles
+      deduplication and settling, so the Approach-A-era filters are
+      redundant. Removes `JITTER_THRESHOLD`, `RISING_WINDOW`,
+      `RISING_THRESHOLD` class constants and the matching keyword
+      arguments; also removes the `deque` import. Updates the
+      README "Computational Flow" section (drops the filter table)
+      and `main.py` docstring (drops filter references). To be
+      re-evaluated during hardware verify — restore if the balance
+      shows jitter or early-trigger emissions on the BCE224I.
+- [x] Partial restore (user 2026-05-20, post hardware verify):
+      hardware test on BCE224I-1SKR confirmed the balance still
+      pushes near-duplicate values at the 0.001 g level under
+      AUTO W/, so the jitter filter is needed. Restored
+      `JITTER_THRESHOLD = 0.01` class constant, the
+      `jitter_threshold` keyword argument on
+      `stream_stable_weights`, and the filter body. Rising-guard
+      stays removed because the user only flagged jitter as
+      needed during verify. Updates README flow diagram, README
+      filter table (now one row), and `main.py` docstring.
+- [ ] Add LearnedPatterns §Q7 if the passive-read refactor surfaces
+      a new SBI-side quirk during hardware verify
+- [x] Ruff check + format check on the modified Python file
+- [x] Hardware verify on `/dev/ttyACM0` (BCE224I-1SKR) — passed
+      with one finding: jitter at the 0.001 g level persists under
+      AUTO W/, so the jitter filter was restored (rising-guard
+      stays removed). No continuous beep observed. Cal block in
+      `main.py` re-enabled before merge so the end-to-end demo
+      again exercises cal → stable read → stream.
+- [x] Commit and push with `refactor(scale):` Conventional Commits
+      prefix (614e230)
+- [x] Open PR per §15.2 (PR #15) — closes #14
+- [ ] GitHub issue update on merge (auto via `Closes #14` in PR #15)
