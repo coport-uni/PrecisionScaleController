@@ -25,12 +25,13 @@ For an end-to-end demo, run [`main.py`](main.py). For flag-driven access there i
 ```bash
 # 1. Plug the balance into a USB-C port. Make sure the front-panel
 #    menu is configured for SBI use:
-#      - STAB.RNG = V.FAST   (BCE manual §7.3.1) — calibration only
-#      - COM.OUTP = IND.AFTR (BCE manual §7.3.6) — "Manual with
-#                              stability"; equivalent to Code 3.1.1.x
-#    Both parameters are menu-only — see "Menu-only calibration
-#    preconditions" below for the reason. The pan must be empty for
-#    the calibration step.
+#      - STAB.RNG = V.FAST (BCE manual §7.3.1) — calibration only
+#      - COM.OUTP = AUTO W/ (BCE manual §7.3.6) — auto output after
+#                              stability; the controller reads this
+#                              stream passively (Approach B)
+#    Both parameters are menu-only — see "Menu-only preconditions"
+#    below for the reason. The pan must be empty for the calibration
+#    step.
 
 # 2. Confirm the device is enumerated.
 ls /dev/ttyACM*           # expect e.g. /dev/ttyACM0
@@ -61,21 +62,13 @@ flowchart TD
     E --> F["calibrate_internal_very_unstable<br/>Esc s3_ → Esc N → Esc x0_"]
     F --> G["Poll Esc kP every 1 s<br/>render stderr progress bar<br/>up to CAL_TIMEOUT_S (180 s)"]
     G --> H["Parse post-cal weight"]
-    H --> I["read_stable_weight<br/>single Esc kP, parse stable reply"]
-    I --> J["stream_stable_weights<br/>loop Esc kP → parse →<br/>jitter + rising-guard filters →<br/>yield each settled new value"]
+    H --> I["read_stable_weight<br/>passive read of AUTO W/ push, parse"]
+    I --> J["stream_stable_weights<br/>loop _read_response → parse →<br/>yield each pushed reading"]
     J -- "KeyboardInterrupt (Ctrl-C)" --> K["print 'stopped.' on stderr"]
     K --> L["Close serial (context exit)"]
 ```
 
-The two stream-level filters are exposed as class constants on `PrecisionScaleController`:
-
-| Constant | Default | Meaning |
-|---|---|---|
-| `JITTER_THRESHOLD` | `0.01` | Skip readings whose absolute change vs. the last *yielded* value is below this band. |
-| `RISING_WINDOW` | `5` | Rolling history size for the rising guard. `0` disables it. |
-| `RISING_THRESHOLD` | `0.05` | While `current − min(window) ≥ this`, hold the reading back as still climbing. |
-
-Pass per-call overrides (`stream_stable_weights(jitter_threshold=..., rising_window=..., rising_threshold=...)`) when you need different behavior — for example, `jitter_threshold=0` falls back to exact-float deduplication only.
+Under Approach B (AUTO W/ + passive read) the balance's own stability detector decides when to push a new value, so the host-side jitter / rising-guard filters that the earlier Approach A polling loop relied on are no longer needed — `stream_stable_weights` simply yields each line the balance sends.
 
 ---
 
@@ -131,30 +124,32 @@ Some response lines are not weight values. The parser raises `ValueError` so the
 
 | Marker | Meaning | Parser behavior |
 |---|---|---|
-| `Stat …` | Unstable reading; menu is misconfigured for Approach A | `ValueError` |
+| `Stat …` | Unstable reading; menu is misconfigured for stability gating | `ValueError` |
 | `Cal.Run.` / `Cal.End` / `Cal.Ext.` / `Cal.Int.` | Calibration in progress or complete | `ValueError` (cal polling loop swallows and continues) |
 | `H` / `High` | Overload | `ValueError` |
 | `L` / `Low` | Underload | `ValueError` |
 | `Err <NNN>` / `APP.ERR` / `DIS.ERR` / `PRT.ERR` | Error code per Technical Note | `RuntimeError` |
 
-`stream_stable_weights` additionally catches `ValueError` from the parser and logs the skip at debug level, so a one-off non-numeric line never tears down the loop.
+`read_stable_weight` swallows transient `ValueError` internally and keeps reading until a parseable line arrives or the timeout expires; `stream_stable_weights` additionally swallows `TimeoutError` so a quiet pan does not end the stream.
 
-### "Manual with stability" menu (Approach A)
+### Auto-push on stability (Approach B)
 
-`read_stable_weight` and `stream_stable_weights` rely on the balance's printer menu (Code 3.1.1.x) being set to **"Manual with stability"** rather than the factory default `IND.NO`. In this mode the balance buffers each `Esc kP` request internally until the reading stabilizes and only then emits the value. The controller is therefore stateless w.r.t. stability — every read is a blocking call that returns one settled value.
+`read_stable_weight` and `stream_stable_weights` rely on the balance's `COM.OUTP` menu (BCE manual §7.3.6, p.22) being set to **`AUTO W/`** — automatic output after stability. In this mode the balance autonomously emits one line on each stability event; the host reads the stream passively, no `Esc kP` triggers. The controller is therefore stateless w.r.t. stability — every read blocks until the next settled value lands.
 
-If the menu is not set this way, you will see `Stat`-prefixed responses and `read_stable_weight` will raise `ValueError`. Either change the menu or use the cal polling loop's pattern (catch the error and retry).
+`IND.AFTR` (manual after stability) also gates on stability and works with an `Esc kP`-driven polling pattern. We prefer **AUTO W/ + passive read** because pairing `Esc kP` with the auto-push stream on this balance keeps the print engine continuously busy and the device emits a steady beep tone — empirically observed on the BCE224I-1SKR. The cal polling loop inside `calibrate_internal_very_unstable` keeps `Esc kP` polling because it needs the `Cal.Run.` / `Cal.End` progress markers that AUTO W/ does not push spontaneously.
+
+If the menu is set to `IND.NO` (factory default) you will see `Stat`-prefixed responses; `read_stable_weight` will keep retrying internally and eventually raise `TimeoutError` once the window expires.
 
 ### Menu-only calibration preconditions
 
-Two further front-panel menu items affect calibration behaviour but are **not reachable via SBI** on the Entris-II BCE224I — the SBI command tables in the [Technical Note](entris-ii-technical-note-en-sartorius.pdf) p.4 list no command for either. They must be configured on the balance before invoking `calibrate_internal_very_unstable`.
+Two front-panel menu items affect calibration and stable-read behaviour but are **not reachable via SBI** on the Entris-II BCE224I — the SBI command tables in the [Technical Note](entris-ii-technical-note-en-sartorius.pdf) p.4 list no command for either. They must be configured on the balance before invoking `calibrate_internal_very_unstable`, `read_stable_weight`, or `stream_stable_weights`.
 
 | Menu item | Manual ref | Recommended value | Why |
 |---|---|---|---|
 | `SETUP → BALANCE → STAB.RNG` | [BCE manual §7.3.1, p.18](manual-entris-bce-precisionbalances-wbc6001bo-pdf-62843--data.pdf) | `V.FAST` | Fastest stability filter, paired with the very-unstable ambient hint that the controller forces via `Esc N`. Distinct from AMBIENT (which **is** SBI-settable via `Esc K/L/M/N`) — same family of "how strictly should the balance treat the reading as settled?", different menu item. |
-| `SETUP → DATA.OUT. → COM. SBI → COM.OUTP` | [BCE manual §7.3.6, p.22](manual-entris-bce-precisionbalances-wbc6001bo-pdf-62843--data.pdf) | `IND.AFTR` | Manual output **after** stability — the Approach A value. Available values are `IND.NO` (factory default, no stability gating), `IND.AFTR`, `AUTO.W/O` (automatic, no stability), `AUTO W/` (automatic on stability). |
+| `SETUP → DATA.OUT. → COM. SBI → COM.OUTP` | [BCE manual §7.3.6, p.22](manual-entris-bce-precisionbalances-wbc6001bo-pdf-62843--data.pdf) | `AUTO W/` | Automatic output **after** stability. Available values are `IND.NO` (factory default, no stability gating), `IND.AFTR` (manual after stability), `AUTO.W/O` (automatic, no stability), `AUTO W/` (automatic on stability). Pairs with passive read; see "Auto-push on stability (Approach B)" above. |
 
-`AUTO W/` is intentionally **not** recommended even though it sounds like the closest match to what calibration wants: it would push auto data on stability and conflict with the controller's `Esc kP` polling. If you need a true auto-print workflow, the controller would have to switch from polling to a passive read loop — out of scope for the current Approach A.
+Both `IND.AFTR` and `AUTO W/` are stability-gated, so either satisfies the correctness requirement; `AUTO W/` is recommended because it eliminates the device-busy beeping that arises when `Esc kP` polling overlaps with auto-push. See [`LearnedPatterns.md`](LearnedPatterns.md) §Q6 for the longer explanation.
 
 Operators changing these menus should do so once at setup time; the balance persists them across power cycles.
 

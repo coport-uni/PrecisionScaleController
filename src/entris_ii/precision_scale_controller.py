@@ -6,27 +6,34 @@ pattern. SBI ASCII protocol per the Entris II Technical Note
 "Commands (Data Input Format)" section.
 
 Iteration 2 adds internal calibration with ambient forced to "very
-unstable" (``Esc N`` + ``Esc Z`` with polling) and stable-weight reads
-under the "Manual with stability" printer menu setting — "Approach A"
-in the design notes (``Esc kP``). The original read-only ID commands
-(``Esc x1_``, ``Esc x2_``) from iteration 1 are unchanged.
+unstable" (``Esc s3_`` + ``Esc N`` + ``Esc x0_`` with ``Esc kP``
+polling) and stable-weight reads through the balance's auto-push
+stream — "Approach B" in the design notes. The original read-only ID
+commands (``Esc x1_``, ``Esc x2_``) from iteration 1 are unchanged.
 
 Hardware assumptions: factory-default USB-C settings per the Entris II
 BCE manual §7.3.4 DEVICE/USB — SBI mode, 9600 baud, ODD parity, 8 data
-bits, 1 stop bit, no handshake. The stable-read and stream behaviours
-additionally require the printer menu (Code 3.1.1.x) set to "Manual
-with stability" so the balance buffers each print until stable.
+bits, 1 stop bit, no handshake.
 
-Menu-only calibration preconditions (cannot be set via SBI on this
-balance — operator must configure on the front panel before invoking
-``calibrate_internal_very_unstable``):
+Menu-only preconditions (cannot be set via SBI on this balance —
+operator must configure on the front panel before invoking
+``calibrate_internal_very_unstable``, ``read_stable_weight``, or
+``stream_stable_weights``):
 
 * ``STAB.RNG = V.FAST`` — stability range, BCE manual §7.3.1 p.18.
   Distinct from AMBIENT (which the controller drives via ``Esc N``).
-* ``COM.OUTP = IND.AFTR`` — manual output after stability, BCE manual
-  §7.3.6 p.22. Matches the polling-based Approach A read flow.
-  ``AUTO W/`` is intentionally not recommended because it pushes auto
-  data on stability and would conflict with ``Esc kP`` polling.
+* ``COM.OUTP = AUTO W/`` — automatic output after stability, BCE
+  manual §7.3.6 p.22. The balance autonomously pushes each new
+  stable value, which ``read_stable_weight`` and
+  ``stream_stable_weights`` read passively. ``IND.AFTR`` (manual
+  after stability) is also stability-gated and works with ``Esc kP``
+  polling, but pairing AUTO W/ with passive read avoids the
+  "device busy" beeping observed when ``Esc kP`` requests overlap
+  with the auto-push stream.
+
+The calibration polling loop is intentionally asymmetric: it still
+uses ``Esc kP`` to fetch progress markers (``Cal.Run.`` / ``Cal.End``)
+that AUTO W/ does not push spontaneously.
 """
 
 from __future__ import annotations
@@ -35,7 +42,6 @@ import logging
 import re
 import sys
 import time
-from collections import deque
 from collections.abc import Iterator
 from types import TracebackType
 from typing import ClassVar, NamedTuple, Self
@@ -114,19 +120,6 @@ class PrecisionScaleController:
     # Width (chars) of the elapsed/total progress bar rendered to
     # stderr during ``calibrate_internal_very_unstable``.
     CAL_PROGRESS_BAR_WIDTH: ClassVar[int] = 20
-
-    # Default filter knobs applied by ``stream_stable_weights``.
-    # ``JITTER_THRESHOLD`` suppresses readings whose absolute change
-    # from the last emitted value is below this band. ``RISING_*``
-    # implement a still-rising guard: once the rolling window of the
-    # last ``RISING_WINDOW`` readings is full, the current reading is
-    # held back while ``current - min(window) >= RISING_THRESHOLD``,
-    # i.e. the balance is still meaningfully climbing. Pass
-    # ``jitter_threshold=0`` or ``rising_window=0`` on the call to
-    # opt out per-call.
-    JITTER_THRESHOLD: ClassVar[float] = 0.01
-    RISING_WINDOW: ClassVar[int] = 5
-    RISING_THRESHOLD: ClassVar[float] = 0.05
 
     # Parse one signed decimal weight + unit anywhere in an SBI line.
     # Covers both the 16-char and 22-char (ID-coded) output formats —
@@ -372,12 +365,12 @@ class PrecisionScaleController:
           AMBIENT (which is SBI-settable via ``Esc K/L/M/N``); the SBI
           command tables in the Technical Note p.4 list no command
           for STAB.RNG.
-        * ``COM.OUTP = IND.AFTR`` (BCE manual §7.3.6, p.22) — manual
-          output after stability, required by the polling-based
-          Approach A flow. ``AUTO W/`` would push auto data on
-          stability and conflict with ``Esc kP`` polling, so it is
-          intentionally not the recommended value despite being the
-          most superficially similar menu option.
+        * ``COM.OUTP = AUTO W/`` (BCE manual §7.3.6, p.22) — see the
+          module docstring for the AUTO W/ vs. IND.AFTR trade-off.
+          The cal polling loop below still issues ``Esc kP`` because
+          it needs the progress markers (``Cal.Run.`` / ``Cal.End``)
+          that AUTO W/ does not push spontaneously; the stable-read
+          methods are passive and rely on the auto-push stream.
 
         Sequence:
             1. ``Esc s3_`` (CANCEL) clears any leftover menu state.
@@ -474,120 +467,88 @@ class PrecisionScaleController:
         self,
         timeout: float = STABLE_READ_TIMEOUT_S,
     ) -> WeightReading:
-        """Read one stable weight value (Approach A).
+        """Read one auto-pushed stable weight (Approach B).
 
-        Sends ``Esc kP`` and reads one SBI response. Approach A assumes
-        the printer menu (Code 3.1.1.x) is set to "Manual with
-        stability" so the balance buffers the print until the reading
-        stabilizes.
+        Under Approach B the balance is configured with
+        ``COM.OUTP = AUTO W/`` (BCE manual §7.3.6, p.22) and emits a
+        new stable value autonomously on each stability event. The
+        host does not send ``Esc kP`` — it simply reads the next
+        line off the wire. This avoids the "device busy" beeping
+        observed when ``Esc kP`` polling overlaps with the
+        auto-push stream.
+
+        Transient non-numeric lines (``Stat``, overload markers,
+        ID-coded interim drift values) are skipped automatically;
+        the method keeps reading until a parseable
+        :class:`WeightReading` arrives or ``timeout`` expires.
 
         Args:
-            timeout: Read timeout in seconds. Default
-                ``STABLE_READ_TIMEOUT_S``.
+            timeout: Maximum wall-clock seconds to wait for the next
+                parseable stable reading. Defaults to
+                :attr:`STABLE_READ_TIMEOUT_S`.
 
         Returns:
-            The parsed ``WeightReading``.
+            The first parseable :class:`WeightReading` observed.
 
         Raises:
-            TimeoutError: If no response arrives within ``timeout``.
-            ValueError: If the response is non-numeric — a ``Stat``
-                prefix here indicates the menu is misconfigured for
-                Approach A.
-            RuntimeError: If the response carries an SBI error code.
+            TimeoutError: If no parseable reading arrives within
+                ``timeout`` seconds.
+            RuntimeError: If the response carries an SBI error code
+                (``Err###``, ``APP.ERR``, ``DIS.ERR``, ``PRT.ERR``).
         """
-        self._send_command(self.CMD_PRINT_KEY)
-        line = self._read_response(timeout=timeout)
-        return self._parse_weight_line(line)
+        deadline = time.monotonic() + timeout
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(
+                    f"no stable reading within {timeout}s under AUTO W/"
+                )
+            try:
+                line = self._read_response(timeout=remaining)
+            except TimeoutError:
+                raise TimeoutError(
+                    f"no stable reading within {timeout}s under AUTO W/"
+                ) from None
+            try:
+                return self._parse_weight_line(line)
+            except ValueError as exc:
+                # Transient non-numeric line — keep waiting for the
+                # next auto-pushed value within the remaining window.
+                self._log.debug("skipping non-numeric SBI line: %s", exc)
 
     def stream_stable_weights(
         self,
         timeout: float = STABLE_READ_TIMEOUT_S,
-        interval: float = 0.1,
-        jitter_threshold: float = JITTER_THRESHOLD,
-        rising_window: int = RISING_WINDOW,
-        rising_threshold: float = RISING_THRESHOLD,
     ) -> Iterator[WeightReading]:
-        """Yield each new stable weight, with jitter + rising filters.
+        """Yield each auto-pushed stable weight.
 
-        Repeatedly calls :meth:`read_stable_weight`. Two filters
-        decide whether a reading is yielded:
+        Reads the balance's AUTO W/ push stream (Approach B) directly
+        — no ``Esc kP`` triggers. Cadence is data-driven: the balance
+        emits one line per new stable value (its own stability
+        detector handles deduplication and settling), so the loop
+        blocks between events rather than spinning and the host does
+        not need its own jitter / rising-guard filters.
 
-        * **Jitter** — readings whose absolute change vs. the last
-          *yielded* value is below ``jitter_threshold`` are dropped.
-          Pass ``0`` to fall back to exact-float deduplication only.
-        * **Rising guard** — a rolling window of the last
-          ``rising_window`` *jitter-passing* readings is kept; while
-          the window is full and
-          ``current - min(window) >= rising_threshold`` the current
-          reading is held back as still-climbing. Pass
-          ``rising_window=0`` to disable.
-
-        Transient ``ValueError`` from :meth:`_parse_weight_line` is
-        logged at debug level and skipped so a one-off non-numeric
-        SBI line (``Stat``, overload markers, or the unit-less
-        ID-coded shape) never tears down the loop.
+        :class:`TimeoutError` from :meth:`read_stable_weight` (no
+        stability event in ``timeout`` seconds) is logged at debug
+        level and the loop continues, so a quiet pan never ends the
+        stream — only ``KeyboardInterrupt`` does.
 
         Args:
-            timeout: Per-read timeout in seconds.
-            interval: Sleep between consecutive
-                :meth:`read_stable_weight` calls. A non-zero value
-                keeps the loop from spinning hot once the balance
-                has settled at the same reading.
-            jitter_threshold: Inclusive lower bound on the change
-                magnitude required for emission. Defaults to
-                :attr:`JITTER_THRESHOLD`.
-            rising_window: Size of the rolling history used by the
-                rising guard. ``0`` disables the guard. Defaults to
-                :attr:`RISING_WINDOW`.
-            rising_threshold: Increase versus ``min(window)`` that
-                marks the value as still climbing. Defaults to
-                :attr:`RISING_THRESHOLD`.
+            timeout: Per-iteration wait budget passed to
+                :meth:`read_stable_weight`.
 
         Yields:
-            ``WeightReading`` instances that survive both filters.
+            :class:`WeightReading` instances pushed by the balance.
         """
-        last_yielded: float | None = None
-        recent: deque[float] = deque(
-            maxlen=rising_window if rising_window > 0 else 1
-        )
         while True:
             try:
                 reading = self.read_stable_weight(timeout=timeout)
-            except ValueError as exc:
-                # Transient non-numeric responses (``Stat``, overload,
-                # or other unstable markers) should not kill the
-                # stream — surface them at debug level and keep going
-                # so the caller observes liveness on the next stable
-                # tick.
-                self._log.debug("skipping non-numeric SBI line: %s", exc)
-                if interval > 0:
-                    time.sleep(interval)
-                continue
-            val = reading.value
-            # Jitter filter. ``delta == 0.0`` also covers exact-float
-            # duplicates when the caller opts out of the jitter band
-            # with ``jitter_threshold=0``.
-            if last_yielded is not None:
-                delta = abs(val - last_yielded)
-                if delta == 0.0 or delta < jitter_threshold:
-                    if interval > 0:
-                        time.sleep(interval)
-                    continue
-            # Rising guard. Compare to the past window before
-            # appending so the current reading is judged against
-            # history; update the window regardless so the trend
-            # keeps tracking.
-            if rising_window > 0:
-                rising = (
-                    len(recent) == rising_window
-                    and val - min(recent) >= rising_threshold
+            except TimeoutError:
+                # Quiet pan — balance hasn't emitted within the
+                # window. Keep waiting; only Ctrl-C ends the stream.
+                self._log.debug(
+                    "no stable reading within %ss; continuing", timeout
                 )
-                recent.append(val)
-                if rising:
-                    if interval > 0:
-                        time.sleep(interval)
-                    continue
+                continue
             yield reading
-            last_yielded = val
-            if interval > 0:
-                time.sleep(interval)
