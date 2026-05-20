@@ -940,8 +940,9 @@ docs-only scope of Task #11.
 - [x] Ruff check + format check on the modified Python file
 - [ ] Hardware verify on `/dev/ttyACM0` (BCE224I-1SKR): run
       cal → single read → stream; confirm no continuous beep,
-      readings still stable, jitter/rising filters still apply
-- [ ] Commit and push with `feat(scale):` or `refactor(scale):`
-      Conventional Commits prefix (decide after diff size known)
-- [ ] Open PR per §15.2 (closes the new issue)
-- [ ] GitHub issue update on merge
+      readings still stable, filter removal still appropriate
+      (restore filters if jitter / early-trigger reappears)
+- [x] Commit and push with `refactor(scale):` Conventional Commits
+      prefix (614e230)
+- [x] Open PR per §15.2 (PR #15) — closes #14
+- [ ] GitHub issue update on merge (auto via `Closes #14` in PR #15)
